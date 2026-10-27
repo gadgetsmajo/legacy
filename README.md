@@ -9,11 +9,11 @@ The backend is a standalone repository, so create a Railway service from `gadget
 1. Add a Railway PostgreSQL service.
 2. In the Django service variables, set `DATABASE_URL` to `${{Postgres.DATABASE_URL}}` (replace `Postgres` if your database service has a different name).
 3. Set `DJANGO_SECRET_KEY` to a new, long random secret and set `DJANGO_DEBUG` to `false`.
-4. Generate the Django service's public domain and set `DJANGO_ALLOWED_HOSTS` to its hostname only (without `https://`).
-5. Set `CORS_ALLOWED_ORIGINS` to the frontend's full origin, including `https://`. Set the Cloudinary variables if profile photo uploads are needed.
+4. The current backend domain is `legacy-production-48e0.up.railway.app`; set `DJANGO_ALLOWED_HOSTS` to that hostname only (without `https://`).
+5. Set `CORS_ALLOWED_ORIGINS` to `https://legacycoffee.github.io` (the origin only; do not include `/Legacy-Coffee/`). Set the Cloudinary variables if profile photo uploads are needed.
 6. Deploy. The Procfile runs migrations and collects static files before starting Gunicorn.
 
-Railway's filesystem is ephemeral; use the PostgreSQL service rather than the local SQLite database for production data. Do not set `DATABASE_URL` to SQLite or commit real secrets.
+The GitHub Pages workflow builds the frontend with `VITE_API_URL=https://legacy-production-48e0.up.railway.app/api`. Railway's filesystem is ephemeral; use the PostgreSQL service rather than the local SQLite database for production data. Do not set `DATABASE_URL` to SQLite or commit real secrets.
 
 ## Local setup (Windows PowerShell)
 
