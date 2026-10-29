@@ -38,6 +38,7 @@ class DashboardApiTests(APITestCase):
             403,
         )
         self.assertEqual(self.client.get('/api/dashboard/inquiries/').status_code, 403)
+        self.assertEqual(self.client.post('/api/dashboard/inquiries/1/open/').status_code, 403)
         self.assertEqual(self.client.get('/api/dashboard/subscribers/').status_code, 403)
         self.assertEqual(self.client.get('/api/dashboard/users/').status_code, 403)
         self.assertEqual(self.client.get('/api/dashboard/analytics/').status_code, 403)
@@ -290,6 +291,67 @@ class DashboardApiTests(APITestCase):
         self.assertEqual(response.data['results'][0]['id'], matching.id)
         self.assertEqual(response.data['results'][0]['email'], matching.email)
         self.assertTrue(response.data['results'][0]['is_active'])
+
+    def test_staff_inquiry_inbox_includes_farm_and_seedling_reservations(self):
+        reservations = (
+            {
+                'kind': Inquiry.Kind.FARM_RESERVATION,
+                'name': 'Farm Customer',
+                'email': 'farm@example.com',
+                'subject': 'Coffee farm tour reservation',
+                'message': 'Package: Individual Package',
+            },
+            {
+                'kind': Inquiry.Kind.SEEDLING_RESERVATION,
+                'name': 'Seedling Customer',
+                'email': 'seedling@example.com',
+                'subject': 'Coffee seedling reservation',
+                'message': 'Type: Robusta',
+            },
+        )
+        for reservation in reservations:
+            Inquiry.objects.create(**reservation)
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.get('/api/dashboard/inquiries/')
+
+        self.assertEqual(response.status_code, 200)
+        requests_by_kind = {item['kind']: item for item in response.data['results']}
+        self.assertEqual(
+            set(requests_by_kind),
+            {Inquiry.Kind.FARM_RESERVATION, Inquiry.Kind.SEEDLING_RESERVATION},
+        )
+        self.assertEqual(
+            requests_by_kind[Inquiry.Kind.FARM_RESERVATION]['message'],
+            'Package: Individual Package',
+        )
+        self.assertEqual(
+            requests_by_kind[Inquiry.Kind.SEEDLING_RESERVATION]['message'],
+            'Type: Robusta',
+        )
+
+    def test_staff_can_mark_new_inquiry_opened_and_clear_new_request_counter(self):
+        inquiry = Inquiry.objects.create(
+            kind=Inquiry.Kind.CONTACT,
+            name='Inquiry Customer',
+            email='inquiry@example.com',
+            subject='Coffee question',
+            message='Please share more details.',
+        )
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.post(f'/api/dashboard/inquiries/{inquiry.pk}/open/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], Inquiry.Status.IN_PROGRESS)
+        inquiry.refresh_from_db()
+        self.assertEqual(inquiry.status, Inquiry.Status.IN_PROGRESS)
+        summary_response = self.client.get('/api/dashboard/')
+        self.assertEqual(summary_response.data['new_inquiries'], 0)
+        inbox_response = self.client.get('/api/dashboard/inquiries/')
+        self.assertEqual(inbox_response.data['results'][0]['id'], inquiry.pk)
+        self.assertEqual(inbox_response.data['results'][0]['status'], Inquiry.Status.IN_PROGRESS)
+
     def test_staff_can_read_order_and_inquiry_inboxes(self):
         product = Product.objects.create(
             slug='arabica',
@@ -509,6 +571,7 @@ class DashboardApiTests(APITestCase):
         second_admin = get_user_model().objects.get(email='second-admin@example.com')
         self.assertTrue(second_admin.is_staff)
         self.assertFalse(second_admin.is_superuser)
+        self.assertTrue(second_admin.must_change_password)
 
         admins_response = self.client.get('/api/dashboard/admins/')
         self.assertEqual(admins_response.status_code, 200)
