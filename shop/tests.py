@@ -32,6 +32,7 @@ class SeedProductsCommandTests(APITestCase):
         existing_product.refresh_from_db()
         self.assertEqual(existing_product.name, 'Custom product name')
         self.assertTrue(Product.objects.filter(slug='single-origin-arabica').exists())
+        self.assertTrue(Product.objects.get(slug='coffee-seedlings').is_active)
         self.assertEqual(Product.objects.count(), 5)
         self.assertIn('Skipped: robusta-blend', output.getvalue())
 
@@ -116,8 +117,13 @@ class ShopApiTests(APITestCase):
         product = next(
             item for item in response.data['results'] if item['id'] == self.product.slug
         )
+        self.assertEqual(str(product['public_id']), str(self.product.public_id))
         self.assertEqual(product['price'], '18')
         self.assertIsNone(product['wholesale_price'])
+        self.assertIn(
+            'coffee-seedlings',
+            [item['id'] for item in response.data['results']],
+        )
 
     def test_product_api_exposes_admin_configured_wholesale_price(self):
         self.product.wholesale_price = 15
