@@ -38,8 +38,9 @@ class DataTransferApiTests(APITestCase):
             ('xml', 'application/xml'),
         )
 
+        Product.objects.all().delete()
         for file_format, content_type in formats:
-            Product.objects.filter(slug__startswith='transfer-').delete()
+            Product.objects.all().delete()
             Product.objects.create(
                 slug=f'transfer-{file_format}',
                 name='Transfer Coffee',
@@ -64,7 +65,7 @@ class DataTransferApiTests(APITestCase):
                 self.assertNotIn('image', exported['records'][0])
                 self.assertNotIn('images.example.com', export_response.content.decode())
 
-            Product.objects.filter(slug=f'transfer-{file_format}').delete()
+            Product.objects.all().delete()
             import_response = self.client.post(
                 '/api/dashboard/data/transfer/',
                 {
