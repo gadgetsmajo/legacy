@@ -11,7 +11,7 @@ from dashboard.models import AnonymousVisitor
 from inquiries.models import Inquiry
 from newsletter.models import Newsletter, Subscriber
 from orders.models import Order, OrderItem
-from shop.models import Product, Review, ShareEvent
+from shop.models import Product, Review, ShareEvent, WishlistItem
 
 
 class DashboardApiTests(APITestCase):
@@ -172,6 +172,162 @@ class DashboardApiTests(APITestCase):
             self.client.patch('/api/dashboard/orders/LC-TEST/status/', {'status': 'confirmed'}).status_code,
             403,
         )
+        self.assertEqual(self.client.get('/api/dashboard/data/').status_code, 403)
+        self.assertEqual(
+            self.client.delete('/api/dashboard/data/clear/', {'category': 'orders'}).status_code,
+            403,
+        )
+
+    def test_staff_can_read_and_clear_admin_data_categories(self):
+        product = Product.objects.create(
+            slug='data-coffee',
+            name='Data Coffee',
+            weight='250g',
+            price=18000,
+            description='Coffee',
+            details='Details',
+            tasting_notes='Citrus',
+            roast='Light roast',
+            image='',
+            image_alt='',
+        )
+        order = Order.objects.create(
+            user=self.customer,
+            customer_name='Coffee Customer',
+            customer_email=self.customer.email,
+            customer_phone='+256700000000',
+            delivery_address='1 Coffee Road',
+            delivery_city='Kampala',
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            weight=product.weight,
+            unit_price=product.price,
+            quantity=1,
+        )
+        Review.objects.create(product=product, user=self.customer, rating=5, text='Great coffee.')
+        WishlistItem.objects.create(user=self.customer, product=product)
+        Notification.objects.create(
+            user=self.customer,
+            kind=Notification.Kind.ORDER_SUBMITTED,
+            title='Order received',
+            message='Your order was received.',
+        )
+        Inquiry.objects.create(
+            kind=Inquiry.Kind.CONTACT,
+            name='Coffee Customer',
+            email=self.customer.email,
+            message='A question',
+        )
+        Newsletter.objects.create(subject='Update', content_html='<p>News</p>')
+        Subscriber.objects.create(email='subscriber@example.com')
+        AnonymousVisitor.objects.create()
+        ShareEvent.objects.create(
+            product=product,
+            product_slug=product.slug,
+            product_name=product.name,
+            channel=ShareEvent.Channel.WHATSAPP,
+        )
+
+        self.client.force_authenticate(self.staff)
+        counts_response = self.client.get('/api/dashboard/data/')
+
+        self.assertEqual(counts_response.status_code, 200)
+        self.assertEqual(counts_response.data['products'], 1)
+        self.assertEqual(counts_response.data['orders'], 1)
+        self.assertEqual(counts_response.data['notifications'], 1)
+        self.assertEqual(counts_response.data['requests'], 1)
+        self.assertEqual(counts_response.data['newsletters'], 1)
+        self.assertEqual(counts_response.data['subscribers'], 1)
+        self.assertEqual(counts_response.data['users'], 1)
+        self.assertEqual(counts_response.data['visitors'], 1)
+        self.assertEqual(counts_response.data['product_shares'], 1)
+
+        for category in ('products', 'orders', 'notifications', 'requests', 'newsletters', 'analytics'):
+            response = self.client.delete(
+                '/api/dashboard/data/clear/',
+                {'category': category},
+                format='json',
+            )
+            self.assertEqual(response.status_code, 200, category)
+            self.assertEqual(response.data['category'], category)
+            expected_deleted = 2 if category in ('newsletters', 'analytics') else 1
+            self.assertEqual(response.data['deleted_count'], expected_deleted)
+            if category == 'products':
+                self.assertIsNone(OrderItem.objects.get(order=order).product_id)
+
+        self.assertFalse(Product.objects.filter(pk=product.slug).exists())
+        self.assertFalse(Review.objects.filter(product_id=product.slug).exists())
+        self.assertFalse(WishlistItem.objects.filter(product_id=product.slug).exists())
+        self.assertFalse(Order.objects.filter(pk=order.pk).exists())
+        self.assertFalse(OrderItem.objects.filter(order=order).exists())
+        self.assertFalse(Notification.objects.exists())
+        self.assertFalse(Inquiry.objects.exists())
+        self.assertFalse(Newsletter.objects.exists())
+        self.assertFalse(Subscriber.objects.exists())
+        self.assertFalse(AnonymousVisitor.objects.exists())
+        self.assertFalse(ShareEvent.objects.exists())
+
+    def test_clearing_users_preserves_active_admins_and_superusers(self):
+        another_customer = get_user_model().objects.create_user(
+            username='another-customer',
+            email='another-customer@example.com',
+            password='StrongPassword!2026',
+        )
+        inactive_admin = get_user_model().objects.create_user(
+            username='inactive-admin',
+            email='inactive-admin@example.com',
+            password='StrongPassword!2026',
+            is_staff=True,
+            is_active=False,
+        )
+        Notification.objects.create(
+            user=self.customer,
+            kind=Notification.Kind.WELCOME,
+            title='Welcome',
+            message='Welcome to Legacy Coffee.',
+        )
+        active_admin = get_user_model().objects.create_user(
+            username='active-admin',
+            email='active-admin@example.com',
+            password='StrongPassword!2026',
+            is_staff=True,
+        )
+        superuser = get_user_model().objects.create_superuser(
+            username='superuser',
+            email='superuser@example.com',
+            password='StrongPassword!2026',
+        )
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.delete(
+            '/api/dashboard/data/clear/',
+            {'category': 'users'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['deleted_count'], 3)
+        self.assertFalse(get_user_model().objects.filter(pk=self.customer.pk).exists())
+        self.assertFalse(Notification.objects.exists())
+        self.assertFalse(get_user_model().objects.filter(pk=another_customer.pk).exists())
+        self.assertFalse(get_user_model().objects.filter(pk=inactive_admin.pk).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.staff.pk, is_active=True).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=active_admin.pk, is_active=True).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=superuser.pk).exists())
+
+    def test_data_clear_rejects_unknown_categories(self):
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.delete(
+            '/api/dashboard/data/clear/',
+            {'category': 'everything'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     def test_staff_can_read_date_filtered_analytics(self):
         today = timezone.localdate()
@@ -590,8 +746,6 @@ class DashboardApiTests(APITestCase):
             'details': 'Grown in Uganda.',
             'tasting_notes': 'Citrus and honey',
             'roast': 'Light roast',
-            'image': 'https://example.com/arabica.jpg',
-            'image_alt': 'Arabica coffee beans',
             'is_active': True,
         }
         self.client.force_authenticate(self.staff)
@@ -600,6 +754,8 @@ class DashboardApiTests(APITestCase):
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.data['slug'], payload['slug'])
         self.assertEqual(Product.objects.get(slug=payload['slug']).price, 18000)
+        self.assertEqual(create_response.data['image'], '')
+        self.assertEqual(Product.objects.get(slug=payload['slug']).image, '')
         public_products = self.client.get('/api/shop/products/').data['results']
         self.assertIn(payload['slug'], [product['id'] for product in public_products])
 
@@ -625,6 +781,57 @@ class DashboardApiTests(APITestCase):
         delete_response = self.client.delete(f'/api/dashboard/products/{payload["slug"]}/')
         self.assertEqual(delete_response.status_code, 204)
         self.assertFalse(Product.objects.filter(slug=payload['slug']).exists())
+
+    def test_staff_can_create_product_without_price_or_tasting_notes(self):
+        payload = {
+            'slug': 'unpriced-coffee',
+            'name': 'Unpriced Coffee',
+            'coffee_type': 'arabica',
+            'weight': '250g',
+            'price': '',
+            'description': 'Available on request.',
+            'details': 'Contact us for current availability.',
+            'tasting_notes': '',
+            'roast': 'Light roast',
+            'is_active': True,
+        }
+        self.client.force_authenticate(self.staff)
+
+        create_response = self.client.post('/api/dashboard/products/', payload, format='json')
+
+        self.assertEqual(create_response.status_code, 201)
+        self.assertIsNone(create_response.data['price'])
+        self.assertEqual(create_response.data['tasting_notes'], '')
+        product = Product.objects.get(slug=payload['slug'])
+        self.assertIsNone(product.price)
+        self.assertEqual(product.tasting_notes, '')
+
+        update_response = self.client.patch(
+            f'/api/dashboard/products/{payload["slug"]}/',
+            {'price': ''},
+            format='json',
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+        self.assertIsNone(update_response.data['price'])
+
+    def test_staff_cannot_set_product_image_with_a_url(self):
+        self.client.force_authenticate(self.staff)
+        response = self.client.post('/api/dashboard/products/', {
+            'slug': 'url-image-coffee',
+            'name': 'URL Image Coffee',
+            'coffee_type': 'arabica',
+            'weight': '250g',
+            'price': '18000',
+            'description': 'Bright and sweet coffee.',
+            'details': 'Grown in Uganda.',
+            'tasting_notes': 'Citrus and honey',
+            'roast': 'Light roast',
+            'image': 'https://example.com/arabica.jpg',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('image', response.data)
 
     def test_non_staff_cannot_manage_products_and_reviewed_products_cannot_be_deleted(self):
         product = Product.objects.create(
@@ -660,7 +867,7 @@ class DashboardApiTests(APITestCase):
             'name': 'Uploaded Coffee',
             'coffee_type': 'arabica',
             'weight': '250g',
-            'price': '18000',
+            'price': '',
             'description': 'Bright and sweet coffee.',
             'details': 'Grown in Uganda.',
             'tasting_notes': 'Citrus and honey',
@@ -683,6 +890,7 @@ class DashboardApiTests(APITestCase):
             'https://res.cloudinary.com/test-cloud/image/upload/products/new-coffee.jpg',
         )
         self.assertEqual(response.data['coffee_type'], 'arabica')
+        self.assertIsNone(response.data['price'])
         upload_image.assert_called_once()
 
     def test_staff_can_create_and_delete_admins_but_an_active_admin_must_remain(self):
